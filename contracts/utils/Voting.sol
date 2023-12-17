@@ -211,4 +211,18 @@ contract Voting {
         }
         return 0; // Address not found
     }
+
+
+    /// @notice Retrieve the number of votes for a given address.
+    /// @param addr The address of the recipient.
+    /// @return The number of votes received by the address.
+    function getVotes(address addr) public view returns (uint256) {
+        uint256 nodeId = addressToNodeId[addr];
+        if (nodeId == 0) {
+            // Address has not received any votes or is not registered
+            return 0;
+        }
+        return list[nodeId].votes;
+    }
+
 }

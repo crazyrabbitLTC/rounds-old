@@ -54,15 +54,17 @@ contract RoundsBase is
     event RoundEnded(uint256 indexed roundNumber);
     event UserRegistered(address indexed user);
     event VoteCast(address indexed voter, uint256 round, address[] recipients);
-    error NoRoundsStarted();
+
+    error RecipientEliminated();
+    error InvalidBallot();
+    error InvalidRound();
     error RegistrationClosed();
     error UserAlreadyRegistered();
     error PreviousRoundNotOver();
-    error RoundNotActive();
     error RoundOver();
     error TooManyVotes();
     error UserNotRegistered();
-    error UserEliminated();
+    error VoterEliminated();
     error NotAdmin();
 
     modifier isOpenToPublic() {
@@ -75,28 +77,25 @@ contract RoundsBase is
         _;
     }
 
+    // Constructor replaced by initializer for upgradeable contract
     function initialize(Setting calldata _settings) public initializer {
         settings = _settings;
         _grantRole(DEFAULT_ADMIN_ROLE, settings.admin);
     }
 
+    // Registers a new voter
     function register() external payable {
         if (!_canRegister()) revert RegistrationClosed();
         if (registered[msg.sender]) revert UserAlreadyRegistered();
 
-        _register(msg.sender);
+        registered[msg.sender] = true;
+        emit UserRegistered(msg.sender);
     }
 
-    function _register(address _voter) internal {
-        registered[_voter] = true;
-        emit UserRegistered(_voter);
-    }
-
+    // Checks if new registrations are allowed
     function _canRegister() internal view returns (bool) {
-        if (rounds.length == 0) {
-            return true;
-        }
-        return settings.allowLateEntrants;
+        // Allow if no rounds have started or late entrants are allowed
+        return rounds.length == 0 || settings.allowLateEntrants;
     }
 
     function startNextRound() external isOpenToPublic {
@@ -107,25 +106,85 @@ contract RoundsBase is
         }
     }
 
-    function castVote(address[] calldata recipients) external nonReentrant {
-        if (!_haveRoundsStarted()) revert NoRoundsStarted();
-        uint256 currentRound = rounds.length - 1;
-        if (!_isRoundActive(currentRound)) revert RoundNotActive();
+    function getCurrentRound() external view returns (uint256) {
+        return _getCurrentRound();
+    }
+
+    function _getCurrentRound() internal view returns (uint256) {
+        if (rounds.length == 0) {
+            return 0;
+        }
+        return rounds.length - 1;
+    }
+
+    // Validates the ballot before casting a vote
+    function _isValidBallot(
+        address[] calldata recipients
+    ) public view returns (bool) {
+        uint256 currentRound = _getCurrentRound();
+        if (!_haveRoundsStarted() || !_isRoundActive(currentRound))
+            revert InvalidRound();
         if (_isRoundOver(currentRound)) revert RoundOver();
         if (!registered[msg.sender]) revert UserNotRegistered();
-        if (recipients.length > settings.maxRecipientsPerVote)
+        if (recipients.length > _votesRemainingInThisRound(msg.sender))
             revert TooManyVotes();
-        if (_checkIfEliminated(msg.sender)) revert UserEliminated();
+        if (_checkIfEliminated(msg.sender)) revert VoterEliminated();
+        for (uint256 i = 0; i < recipients.length; i++) {
+            if (_checkIfEliminated(recipients[i])) revert RecipientEliminated();
+        }
+        return true;
+    }
 
-        numberOfVotesCastInThisRound[msg.sender][currentRound] += recipients
-            .length;
+    function _votesRemainingInThisRound(
+        address voter
+    ) internal view returns (uint256) {
+        uint256 currentRound = _getCurrentRound();
+        uint256 votesCast = numberOfVotesCastInThisRound[voter][currentRound];
+
+        if (votesCast >= settings.maxRecipientsPerVote) {
+            return 0;
+        }
+
+        return settings.maxRecipientsPerVote - votesCast;
+    }
+
+    function _updateVotersVotesRemaining(
+        address voter,
+        uint256 roundNumber,
+        uint256 votes
+    ) internal {
+        numberOfVotesCastInThisRound[voter][roundNumber] += votes;
+    }
+
+    function castVote(address[] calldata recipients) external nonReentrant {
+        _isValidBallot(recipients);
+
+        if (_votesRemainingInThisRound(msg.sender) < recipients.length)
+            revert TooManyVotes();
+
+        uint256 currentRound = _getCurrentRound();
+
+        _updateVotersVotesRemaining(
+            msg.sender,
+            currentRound,
+            recipients.length
+        );
+
         for (uint256 i = 0; i < recipients.length; i++) {
             rounds[currentRound].votes.castVote(
                 recipients[i],
                 settings.defaultVoteWeight
             );
         }
+
         emit VoteCast(msg.sender, currentRound, recipients);
+    }
+
+    function getVotes(
+        address recipient,
+        uint256 round
+    ) external view returns (uint256) {
+        return rounds[round].votes.getVotes(recipient);
     }
 
     function _checkIfEliminated(address voter) internal pure returns (bool) {
@@ -144,20 +203,21 @@ contract RoundsBase is
         return rounds.length > 0;
     }
 
+    // Simplify function to start the next round
     function _startNextRound() internal {
         Voting newVotingInstance = new Voting();
-        Round memory newRoundStruct = Round({
+        Round memory newRound = Round({
             votes: newVotingInstance,
             startingTime: block.timestamp,
             endingTime: block.timestamp + settings.roundDuration,
             active: true
         });
-        rounds.push(newRoundStruct);
+        rounds.push(newRound);
         emit RoundStarted(
             rounds.length,
             address(newVotingInstance),
-            newRoundStruct.startingTime,
-            newRoundStruct.endingTime
+            newRound.startingTime,
+            newRound.endingTime
         );
     }
 }

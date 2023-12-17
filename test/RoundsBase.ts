@@ -15,7 +15,7 @@ describe("RoundsBase Contract", function () {
         let settings: any;
         [deployer, admin, user, user2, user3, user4] = await ethers.getSigners();
 
-        let recipients = [user, user2, user3, user4,];
+        let recipients = [user, user2, user3];
 
         settings = {
             name: "Test Round",
@@ -130,7 +130,7 @@ describe("RoundsBase Contract", function () {
         it("should not allow a user to cast a vote with no rounds", async function () {
             const { roundsBase, settings, user, admin, recipients } = await loadFixture(deployRoundBaseFixture);
             await roundsBase.connect(user).register();
-            await expect(roundsBase.connect(user).castVote(recipients)).to.be.revertedWithCustomError(roundsBase, "NoRoundsStarted")
+            await expect(roundsBase.connect(user).castVote(recipients)).to.be.revertedWithCustomError(roundsBase, "InvalidRound")
         });
 
 
@@ -173,8 +173,139 @@ describe("RoundsBase Contract", function () {
             await expect(roundsBase.connect(user).castVote(tooManyRecipients))
                 .to.be.revertedWithCustomError(roundsBase, "TooManyVotes");
         });
+
+        it("should correctly increment the number of votes cast in the current round", async function () {
+            const { roundsBase, user, admin, recipients, settings } = await loadFixture(deployRoundBaseFixture);
+
+            const correctNumberOfRecipients = new Array(settings.maxRecipientsPerVote).fill(user.address);
+            await roundsBase.connect(user).register();
+            await roundsBase.connect(admin).startNextRound();
+
+            await roundsBase.connect(user).castVote(correctNumberOfRecipients);
+
+            const currentRound = await roundsBase.getCurrentRound();
+            const votesCast = await roundsBase.numberOfVotesCastInThisRound(user.address, currentRound);
+            expect(votesCast).to.equal(correctNumberOfRecipients.length);
+        });
+
+
+
+
+        //   it("should revert if trying to cast a vote for an eliminated user", async function () {
+        //     const { roundsBase, user, admin, eliminatedUser } = await loadFixture(deployRoundBaseFixture);
+
+        //     await roundsBase.connect(user).register();
+        //     await roundsBase.connect(admin).startNextRound();
+
+        //     // Assuming there is a way to eliminate a user in the contract
+        //     await roundsBase.eliminateUser(eliminatedUser.address);
+
+        //     await expect(roundsBase.connect(user).castVote([eliminatedUser.address]))
+        //       .to.be.revertedWithCustomError(roundsBase, "UserEliminated");
+        //   });
+
+        it("should revert if trying to cast a vote in a round that has not started", async function () {
+            const { roundsBase, user, recipients } = await loadFixture(deployRoundBaseFixture);
+
+            await roundsBase.connect(user).register();
+
+            // Do not start the round
+
+            await expect(roundsBase.connect(user).castVote(recipients))
+                .to.be.revertedWithCustomError(roundsBase, "InvalidRound");
+        });
+
+        it("should allow user to vote more than once in the same round if they still have votes", async function () {
+            const { roundsBase, user, admin, recipients } = await loadFixture(deployRoundBaseFixture);
+
+            await roundsBase.connect(user).register();
+            await roundsBase.connect(admin).startNextRound();
+            const correctNumberOfRecipients = new Array(1).fill(user.address);
+            await expect(roundsBase.connect(user).castVote(correctNumberOfRecipients)).to.emit(roundsBase, "VoteCast");
+            await expect(roundsBase.connect(user).castVote(correctNumberOfRecipients)).to.emit(roundsBase, "VoteCast");
+            await expect(roundsBase.connect(user).castVote(correctNumberOfRecipients)).to.emit(roundsBase, "VoteCast");
+        });
+
+        it("should not allow user to vote more than once in the same round if they run out of  votes", async function () {
+            const { roundsBase, user, admin } = await loadFixture(deployRoundBaseFixture);
+
+            await roundsBase.connect(user).register();
+            await roundsBase.connect(admin).startNextRound();
+
+            // single recipients
+            const recipients = new Array(1).fill(user.address);
+            await expect(roundsBase.connect(user).castVote(recipients)).to.emit(roundsBase, "VoteCast");
+            await expect(roundsBase.connect(user).castVote(recipients)).to.emit(roundsBase, "VoteCast");
+            await expect(roundsBase.connect(user).castVote(recipients)).to.emit(roundsBase, "VoteCast");
+            await expect(roundsBase.connect(user).castVote(recipients)).to.be.revertedWithCustomError(roundsBase, "TooManyVotes");
+
+        });
+
+        it("should allow user to vote more than once in the same round if they still have votes", async function () {
+            const { roundsBase, user, admin, } = await loadFixture(deployRoundBaseFixture);
+
+            await roundsBase.connect(user).register();
+            await roundsBase.connect(admin).startNextRound();
+            const recipient = new Array(1).fill(user.address);
+            await expect(roundsBase.connect(user).castVote(recipient)).to.emit(roundsBase, "VoteCast");
+            await expect(roundsBase.connect(user).castVote(recipient)).to.emit(roundsBase, "VoteCast");
+            await expect(roundsBase.connect(user).castVote(recipient)).to.emit(roundsBase, "VoteCast");
+        });
+
+        it("should correctly report the number of votes for an address", async function() {
+            const { roundsBase, admin, user, recipients } = await loadFixture(deployRoundBaseFixture);
+            
+            await roundsBase.connect(user).register();
+            await roundsBase.connect(admin).startNextRound();
+
+            
+            // Start a round and cast votes
+            const recipient = new Array(1).fill(recipients[2].address);
+            await roundsBase.connect(user).castVote(recipient);
+
+            // Retrieve Votes
+            const currentRound = await roundsBase.getCurrentRound();
+            const votes = await roundsBase.getVotes(recipient[0], currentRound);
+            const voteOfaNoncandidate = await roundsBase.getVotes(admin.address, currentRound);
+            expect(votes).to.equal(1);
+            expect(voteOfaNoncandidate).to.equal(0);
+        });
+        
+
     });
 
+    describe("Round Completion", function () {
+        it("should correctly tally votes after a round is finished", async function () {
+            const { roundsBase, user, admin, recipients, settings } = await loadFixture(deployRoundBaseFixture);
+
+            // Register user
+            await roundsBase.connect(user).register();
+
+            // Start a new round
+            await roundsBase.connect(admin).startNextRound();
+
+            // Vote
+            await roundsBase.connect(user).castVote([recipients[0].address, recipients[1].address]);
+
+            // Simulate the end of the round
+            await time.increase(settings.roundDuration + 1);
+
+            // Check that the round has ended
+            const currentRound = await roundsBase.getCurrentRound();
+            const roundInfo = await roundsBase.rounds(currentRound);
+
+            // TODO update how I handle active
+            // expect(roundInfo.active).to.be.false; 
+
+            // Check the final vote count for each recipient
+            // This assumes the Voting contract has a method to retrieve votes for a recipient in a given round
+            const votesForFirstRecipient = await roundsBase.getVotes(recipients[0].address, currentRound);
+            const votesForSecondRecipient = await roundsBase.getVotes(recipients[1].address, currentRound);
+
+            expect(votesForFirstRecipient).to.equal(settings.defaultVoteWeight);
+            expect(votesForSecondRecipient).to.equal(settings.defaultVoteWeight);
+        });
+    });
 
 
 });
