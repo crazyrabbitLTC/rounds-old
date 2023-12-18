@@ -26,9 +26,9 @@ describe("RoundsBase Contract", function () {
             roundDuration: 3600, // 1 hour
             rounds: 5,
             maxRecipientsPerVote: 3,
-            defaultVoteWeight: 1,
-            allowLateEntrants: false,
-            allowPublicStartAndEnd: true
+            allowPublicStartAndEnd: true,
+            eliminationNumerator: 20, // Threshold percentage numerator for elimination (0-100)
+            eliminateTop: true,
         };
 
         const RoundsBaseFactory = await ethers.getContractFactory("RoundsBase", deployer);
@@ -50,8 +50,6 @@ describe("RoundsBase Contract", function () {
         expect(parseInt(contractSettings.roundDuration.toString())).to.equal(settings.roundDuration);
         expect(parseInt(contractSettings.rounds.toString())).to.equal(settings.rounds);
         expect(parseInt(contractSettings.maxRecipientsPerVote.toString())).to.equal(settings.maxRecipientsPerVote);
-        expect(parseInt(contractSettings.defaultVoteWeight.toString())).to.equal(settings.defaultVoteWeight);
-        expect(contractSettings.allowLateEntrants).to.equal(settings.allowLateEntrants);
         expect(contractSettings.allowPublicStartAndEnd).to.equal(settings.allowPublicStartAndEnd);
     });
 
@@ -74,14 +72,49 @@ describe("RoundsBase Contract", function () {
     });
 
     describe("Starting and Ending Rounds", function () {
+        it("should allow starting the first round", async function () {
+            const { roundsBase, settings, user, admin } = await loadFixture(deployRoundBaseFixture);
+            await expect(roundsBase.connect(admin).startNextRound())
+                .to.emit(roundsBase, "RoundStarted");
+        });
+
+        it("should increment rounds correctly", async function () {
+            const { roundsBase, settings, user, admin } = await loadFixture(deployRoundBaseFixture);
+
+            await expect(roundsBase.connect(admin).startNextRound())
+                .to.emit(roundsBase, "RoundStarted");
+
+            expect(await roundsBase.getCurrentRound()).to.equal(0);
+            // move forward in time
+            await time.increase(settings.roundDuration + 1);
+
+            await expect(roundsBase.connect(admin).startNextRound())
+                .to.emit(roundsBase, "RoundStarted");
+            expect(await roundsBase.getCurrentRound()).to.equal(1);
+
+            // move forward in time
+            await time.increase(settings.roundDuration + 1);
+
+            await expect(roundsBase.connect(admin).startNextRound())
+                .to.emit(roundsBase, "RoundStarted");
+            expect(await roundsBase.getCurrentRound()).to.equal(2);
+        });
+
         it("should allow starting the next round if conditions are met", async function () {
             const { roundsBase, settings, user, admin } = await loadFixture(deployRoundBaseFixture);
+
+            // start round
+            await expect(roundsBase.connect(admin).startNextRound())
+                .to.emit(roundsBase, "RoundStarted");
+
+            // move forward in time
+            await time.increase(settings.roundDuration + 1);
 
             await expect(roundsBase.connect(admin).startNextRound())
                 .to.emit(roundsBase, "RoundStarted");
         });
 
-        it("should revert starting the next round if conditions are not met", async function () {
+        it("should revert starting the next round if previous round has not finished", async function () {
             const { roundsBase, settings, user, admin } = await loadFixture(deployRoundBaseFixture);
             // start a round first
             await expect(roundsBase.connect(admin).startNextRound())
@@ -89,10 +122,9 @@ describe("RoundsBase Contract", function () {
             // Start a second round with the previous round not over
             await expect(roundsBase.connect(admin).startNextRound())
                 .to.be.revertedWithCustomError(roundsBase, "PreviousRoundNotOver");
-
         });
 
-        it("should revert starting the next round if previous rounnd hasn't finished", async function () {
+        it("should revert starting the next round if previous round hasn't finished", async function () {
             const { roundsBase, settings, user, admin } = await loadFixture(deployRoundBaseFixture);
             // start first round
             await expect(roundsBase.connect(admin).startNextRound())
@@ -111,11 +143,10 @@ describe("RoundsBase Contract", function () {
             await expect(roundsBase.connect(user).register()).to.emit(roundsBase, "UserRegistered");
         });
 
-        it("should not allow user to register after a round has started if late registration is not allowed", async function () {
+        it("should not allow user to register after a round has started", async function () {
             const { roundsBase, settings, user, admin, recipients } = await loadFixture(deployRoundBaseFixture);
 
             const contractSettings = await roundsBase.settings();
-            expect(contractSettings.allowLateEntrants).to.equal(false);
 
             await roundsBase.connect(admin).startNextRound()
             await expect(roundsBase.connect(user).register()).to.be.revertedWithCustomError(roundsBase, "RegistrationClosed");
@@ -161,7 +192,7 @@ describe("RoundsBase Contract", function () {
             time.increase(settings.roundDuration + 1);
 
             await expect(roundsBase.connect(user).castVote(recipients))
-                .to.be.revertedWithCustomError(roundsBase, "RoundOver");
+                .to.be.revertedWithCustomError(roundsBase, "RoundNotActive");
         });
 
         it("should revert if too many votes are cast", async function () {
@@ -252,13 +283,13 @@ describe("RoundsBase Contract", function () {
             await expect(roundsBase.connect(user).castVote(recipient)).to.emit(roundsBase, "VoteCast");
         });
 
-        it("should correctly report the number of votes for an address", async function() {
+        it("should correctly report the number of votes for an address", async function () {
             const { roundsBase, admin, user, recipients } = await loadFixture(deployRoundBaseFixture);
-            
+
             await roundsBase.connect(user).register();
             await roundsBase.connect(admin).startNextRound();
 
-            
+
             // Start a round and cast votes
             const recipient = new Array(1).fill(recipients[2].address);
             await roundsBase.connect(user).castVote(recipient);
@@ -270,12 +301,12 @@ describe("RoundsBase Contract", function () {
             expect(votes).to.equal(1);
             expect(voteOfaNoncandidate).to.equal(0);
         });
-        
+
 
     });
 
-    describe("Round Completion", function () {
-        it("should correctly tally votes after a round is finished", async function () {
+    describe("Vote Integrity", function () {
+        it("should correctly tally votes", async function () {
             const { roundsBase, user, admin, recipients, settings } = await loadFixture(deployRoundBaseFixture);
 
             // Register user
@@ -294,18 +325,117 @@ describe("RoundsBase Contract", function () {
             const currentRound = await roundsBase.getCurrentRound();
             const roundInfo = await roundsBase.rounds(currentRound);
 
-            // TODO update how I handle active
-            // expect(roundInfo.active).to.be.false; 
-
             // Check the final vote count for each recipient
             // This assumes the Voting contract has a method to retrieve votes for a recipient in a given round
             const votesForFirstRecipient = await roundsBase.getVotes(recipients[0].address, currentRound);
             const votesForSecondRecipient = await roundsBase.getVotes(recipients[1].address, currentRound);
 
-            expect(votesForFirstRecipient).to.equal(settings.defaultVoteWeight);
-            expect(votesForSecondRecipient).to.equal(settings.defaultVoteWeight);
+            expect(votesForFirstRecipient).to.equal(1);
+            expect(votesForSecondRecipient).to.equal(1);
         });
+
     });
 
 
+});
+
+describe("Elimination Logic", function () {
+
+    async function deployRoundBaseFixture() {
+        let roundsBase: RoundsBase;
+        let deployer: SignerWithAddress, admin: SignerWithAddress, user: SignerWithAddress, user2: SignerWithAddress, user3: SignerWithAddress, user4: SignerWithAddress;
+        let settings: any;
+        [deployer, admin, user, user2, user3, user4] = await ethers.getSigners();
+
+        let recipients = [user, user2, user3];
+
+        settings = {
+            name: "Test Round",
+            admin: admin.address,
+            metadata: ethers.keccak256(ethers.toUtf8Bytes("Test Round Metadata")),
+            houseSplit: 50,
+            winnerSplit: 50,
+            roundDuration: 3600, // 1 hour
+            rounds: 5,
+            maxRecipientsPerVote: 3,
+            defaultVoteWeight: 1,
+            allowPublicStartAndEnd: true,
+            eliminationNumerator: 20, // Bottom 20% gets eliminated
+            eliminateTop: false
+        };
+
+        const RoundsBaseFactory = await ethers.getContractFactory("RoundsBase", deployer);
+        roundsBase = await RoundsBaseFactory.deploy() as RoundsBase;
+        await roundsBase.initialize(settings);
+
+        // Register users
+        await roundsBase.connect(user).register();
+        await roundsBase.connect(user2).register();
+        await roundsBase.connect(user3).register();
+        await roundsBase.connect(user4).register();
+
+
+        return { roundsBase, deployer, admin, user, user2, user3, user4, settings, recipients };
+    };
+    it("should correctly eliminate candidates based on voting", async function () {
+        const { roundsBase, admin, user, user2, user3, user4, settings } = await loadFixture(deployRoundBaseFixture);
+
+        // Admin starts the first round
+        await roundsBase.connect(admin).startNextRound();
+
+        // Cast votes: User and User2 vote for User3, User4 gets no votes, User votes for themselves
+        await roundsBase.connect(user).castVote([user.address]);
+        await roundsBase.connect(user2).castVote([user3.address]);
+        await roundsBase.connect(user3).castVote([user3.address]);
+
+        // Simulate the end of the round
+        await time.increase(settings.roundDuration + 1);
+
+        await roundsBase.connect(admin).startNextRound();
+
+        // Check if User4 is eliminated (no votes)
+        expect(await roundsBase.isEliminated(user4.address)).to.be.true;
+        expect(await roundsBase.getVotes(user4.address, 0)).to.equal(0);
+
+        // Check if User3 is not eliminated (most votes)
+        expect(await roundsBase.isEliminated(user3.address)).to.be.false;
+        expect(await roundsBase.getVotes(user3.address, 0)).to.equal(2);
+        // Check if User is not eliminated (received some votes)
+        expect(await roundsBase.isEliminated(user.address)).to.be.false;
+        expect(await roundsBase.getVotes(user.address, 0)).to.equal(1);
+
+    });
+    it("should eliminate a candidate who falls into the elimination zone after a round", async function () {
+        const { roundsBase, admin, user, user2, user3, user4, settings } = await loadFixture(deployRoundBaseFixture);
+
+        // Admin starts the first round
+        await roundsBase.connect(admin).startNextRound();
+
+        // Cast votes
+        // User and User2 vote for User3, User4 gets no votes
+        await roundsBase.connect(user).castVote([user3.address]);
+        await roundsBase.connect(user2).castVote([user3.address]);
+
+        // check which round we are in
+        expect(await roundsBase.getCurrentRound()).to.equal(0);
+
+        // Simulate the end of the round
+        await time.increase(settings.roundDuration + 1);
+
+        // Admin starts the next round, which should also end the current round
+        await roundsBase.connect(admin).startNextRound();
+
+        // check which round we are in
+        expect(await roundsBase.getCurrentRound()).to.equal(1);
+
+        // User4 should be eliminated as they are in the bottom 20% (received no votes)
+        expect(await roundsBase.isEliminated(user4.address)).to.be.true;
+    });
+
+    // Other test scenarios...
+
+    //Cases where multiple candidates fall into the elimination zone.
+    //Scenarios where no candidates are eliminated.
+    //Edge cases, like when all candidates receive equal votes.
+    //Test when a voter is eliminted trying to vote again
 });

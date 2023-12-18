@@ -212,7 +212,6 @@ contract Voting {
         return 0; // Address not found
     }
 
-
     /// @notice Retrieve the number of votes for a given address.
     /// @param addr The address of the recipient.
     /// @return The number of votes received by the address.
@@ -225,4 +224,26 @@ contract Voting {
         return list[nodeId].votes;
     }
 
+    // Additional function in the Voting contract to get the recipient of a node by index
+    function getNodeRecipient(uint256 index) external view returns (address) {
+        return list[index].recipient;
+    }
+
+    function getNodeRecipientByIndex(
+        uint256 index
+    ) public view returns (address) {
+        uint256 currentId = head;
+        uint256 currentIndex = 0;
+
+        while (currentId != 0 && currentIndex < index) {
+            currentId = list[currentId].next;
+            currentIndex++;
+        }
+
+        if (currentId != 0 && currentIndex == index) {
+            return list[currentId].recipient;
+        } else {
+            return address(0); // Return zero address if index is out of bounds
+        }
+    }
 }
