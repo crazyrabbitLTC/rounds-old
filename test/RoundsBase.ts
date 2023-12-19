@@ -62,12 +62,16 @@ describe("RoundsBase Contract", function () {
                 .withArgs(user.address);
         });
 
-        xit("should revert registration when registration is closed", async function () {
-            const { roundsBase, settings, user } = await loadFixture(deployRoundBaseFixture);
+        it("should revert registration when registration is closed", async function () {
+            const { roundsBase, settings, user, admin } = await loadFixture(deployRoundBaseFixture);
+
+            // Start round (and close registration)
+            await expect(roundsBase.connect(admin).startNextRound())
+            .to.emit(roundsBase, "RoundStarted");
 
             // Simulate closing registration here
             await expect(roundsBase.connect(user).register())
-                .to.be.revertedWith("RegistrationClosed");
+                .to.be.revertedWithCustomError(roundsBase, "RegistrationClosed");
         });
     });
 
