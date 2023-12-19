@@ -1,8 +1,5 @@
-Certainly! Below is a README template for your `RoundsBase` smart contract project. This template includes sections like project description, installation, running tests, and contributing. You might need to adjust it according to the specific details and requirements of your project.
 
----
-
-# RoundsBase Smart Contract Project
+# Rounds 
 
 ## Description
 
