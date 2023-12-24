@@ -140,6 +140,107 @@ describe("RoundsBase Contract", function () {
 
     });
 
+    describe("Tally Total Votes", function () {
+        it("should correctly tally votes for a single round", async function () {
+            const { roundsBase, user, admin, recipients } = await loadFixture(deployRoundBaseFixture);
+            
+            await roundsBase.connect(user).register();
+            await roundsBase.connect(admin).startNextRound();
+        
+            // user casts a vote for a recipient
+            await roundsBase.connect(user).castVote([recipients[0].address]);
+
+            // Check the vote tally for the recipient
+            const votes = await roundsBase.getCandidateTotalVotes(recipients[0].address);
+            expect(votes).to.equal(1);
+          });
+
+          it("should correctly tally votes across multiple rounds with time advancement", async function () {
+            const { roundsBase, user, admin, recipients, settings } = await loadFixture(deployRoundBaseFixture);
+            
+            await roundsBase.connect(user).register();
+        
+            for (let i = 0; i < 3; i++) {
+              await roundsBase.connect(admin).startNextRound();
+              await roundsBase.connect(user).castVote([recipients[0].address]);
+        
+              // Advance time to simulate the end of the round
+              await time.increase(settings.roundDuration + 1);
+        
+              // If necessary, you can add a check here to ensure the round has ended
+              // Example: expect(await roundsBase.getCurrentRound()).to.equal(i + 1);
+            }
+        
+            const votes = await roundsBase.getCandidateTotalVotes(recipients[0].address);
+            expect(votes).to.equal(3); // Expect 3 votes across 3 rounds
+          });
+
+          it("should show zero votes when no votes are cast", async function () {
+            const { roundsBase, admin, recipients, settings } = await loadFixture(deployRoundBaseFixture);
+        
+            await roundsBase.connect(admin).startNextRound();
+            // No votes are cast in this round
+            await time.increase(settings.roundDuration + 1);
+        
+            const votes = await roundsBase.getCandidateTotalVotes(recipients[0].address);
+            expect(votes).to.equal(0);
+          });
+        
+          it.only("should correctly tally votes for multiple candidates", async function () {
+            const { roundsBase, user, admin, recipients, settings } = await loadFixture(deployRoundBaseFixture);
+        
+            await roundsBase.connect(user).register();
+            await roundsBase.connect(admin).startNextRound();
+            await roundsBase.connect(user).castVote([recipients[0].address, recipients[1].address]);
+            await time.increase(settings.roundDuration + 1);
+        
+            const votesRecipient1 = await roundsBase.getCandidateTotalVotes(recipients[0].address);
+            const votesRecipient2 = await roundsBase.getCandidateTotalVotes(recipients[1].address);
+            expect(votesRecipient1).to.equal(1);
+            expect(votesRecipient2).to.equal(1);
+          });
+        
+          it("should handle max votes per user per round", async function () {
+            const { roundsBase, user, admin, recipients, settings } = await loadFixture(deployRoundBaseFixture);
+        
+            await roundsBase.connect(user).register();
+            await roundsBase.connect(admin).startNextRound();
+        
+            const maxVotesArray = Array(settings.maxRecipientsPerVote).fill(recipients[0].address);
+            await roundsBase.connect(user).castVote(maxVotesArray);
+            await time.increase(settings.roundDuration + 1);
+        
+            const votes = await roundsBase.getCandidateTotalVotes(recipients[0].address);
+            expect(votes).to.equal(settings.maxRecipientsPerVote);
+          });
+        
+          it("should correctly tally votes across rounds with different voting patterns", async function () {
+            const { roundsBase, user, admin, recipients, settings } = await loadFixture(deployRoundBaseFixture);
+        
+            await roundsBase.connect(user).register();
+        
+            // Round 1: Vote for recipient 0
+            await roundsBase.connect(admin).startNextRound();
+            await roundsBase.connect(user).castVote([recipients[0].address]);
+            await time.increase(settings.roundDuration + 1);
+        
+            // Round 2: No votes
+            await roundsBase.connect(admin).startNextRound();
+            await time.increase(settings.roundDuration + 1);
+        
+            // Round 3: Vote for recipient 1
+            await roundsBase.connect(admin).startNextRound();
+            await roundsBase.connect(user).castVote([recipients[1].address]);
+            await time.increase(settings.roundDuration + 1);
+        
+            const votesRecipient0 = await roundsBase.getCandidateTotalVotes(recipients[0].address);
+            const votesRecipient1 = await roundsBase.getCandidateTotalVotes(recipients[1].address);
+            expect(votesRecipient0).to.equal(1);
+            expect(votesRecipient1).to.equal(1);
+          });
+        
+    })
+
     describe("Registration", function () {
 
         it("should allow a user to register before any rounds", async function () {

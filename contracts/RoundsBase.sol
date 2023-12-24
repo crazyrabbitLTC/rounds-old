@@ -43,6 +43,7 @@ contract RoundsBase is
 
     Setting public settings;
     Round[] public rounds;
+    Voting public roundTracker;
 
     event RoundStarted(
         uint256 indexed roundNumber,
@@ -83,6 +84,9 @@ contract RoundsBase is
     function initialize(Setting calldata _settings) public initializer {
         settings = _settings;
         _grantRole(DEFAULT_ADMIN_ROLE, settings.admin);
+
+        // Setup a total vote stracker
+        roundTracker = new Voting();
     }
 
     // Registers a new voter
@@ -135,15 +139,32 @@ contract RoundsBase is
     function castVote(address[] calldata recipients) external nonReentrant {
         _isValidBallot(recipients, msg.sender);
         uint256 currentRound = _getCurrentRound();
+        uint256 defaultVoteAmount = 1;
         _updateVotersVotesRemaining(
             msg.sender,
             currentRound,
             recipients.length
         );
         for (uint256 i = 0; i < recipients.length; i++) {
-            rounds[currentRound].votes.castVote(recipients[i], 1);
+            rounds[currentRound].votes.castVote(
+                recipients[i],
+                defaultVoteAmount
+            );
+            _tallyTotalVotes(recipients[i], defaultVoteAmount);
         }
         emit VoteCast(msg.sender, currentRound, recipients);
+    }
+
+    function _tallyTotalVotes(address recipient, uint256 votes) internal {
+        roundTracker.castVote(recipient, votes);
+    }
+
+    function getCandidateTotalVotes(address candidate)
+        external
+        view
+        returns (uint256)
+    {
+        return roundTracker.getVotes(candidate);
     }
 
     function _isValidBallot(
@@ -166,25 +187,45 @@ contract RoundsBase is
 
     // Function to check if a candidate has been eliminated in any round
     function isEliminated(address candidate) public view returns (bool) {
-        for (uint256 roundNumber = 0; roundNumber < rounds.length; roundNumber++) {
+        for (
+            uint256 roundNumber = 0;
+            roundNumber < rounds.length;
+            roundNumber++
+        ) {
             if (!_isRoundActive(roundNumber)) {
-                uint256 totalNodes = rounds[roundNumber].votes.getTotalNodeCount();
-                uint256 effectiveTotal = totalRegisteredCandidates > totalNodes ? totalRegisteredCandidates : totalNodes;
+                uint256 totalNodes = rounds[roundNumber]
+                    .votes
+                    .getTotalNodeCount();
+                uint256 effectiveTotal = totalRegisteredCandidates > totalNodes
+                    ? totalRegisteredCandidates
+                    : totalNodes;
 
                 uint256 thresholdIndex;
                 if (settings.eliminateTop) {
                     // Top elimination: Consider the top percentage of totalNodes
-                    thresholdIndex = (totalNodes * settings.eliminationNumerator) / 100;
+                    thresholdIndex =
+                        (totalNodes * settings.eliminationNumerator) /
+                        100;
                 } else {
                     // Bottom elimination: Consider the bottom percentage of effectiveTotal
-                    thresholdIndex = effectiveTotal - (effectiveTotal * settings.eliminationNumerator) / 100;
+                    thresholdIndex =
+                        effectiveTotal -
+                        (effectiveTotal * settings.eliminationNumerator) /
+                        100;
                 }
-                require(thresholdIndex <= effectiveTotal, "Threshold index calculation overflow");
+                require(
+                    thresholdIndex <= effectiveTotal,
+                    "Threshold index calculation overflow"
+                );
 
-                uint256 candidatePosition = rounds[roundNumber].votes.getPositionByAddress(candidate);
+                uint256 candidatePosition = rounds[roundNumber]
+                    .votes
+                    .getPositionByAddress(candidate);
                 if (candidatePosition == 0) {
                     // For candidates with no votes, position is considered at the end if eliminateTop is false
-                    candidatePosition = settings.eliminateTop ? 0 : effectiveTotal + 1;
+                    candidatePosition = settings.eliminateTop
+                        ? 0
+                        : effectiveTotal + 1;
                 }
 
                 bool isInEliminationZone = settings.eliminateTop
