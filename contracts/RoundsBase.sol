@@ -45,6 +45,10 @@ contract RoundsBase is
     Round[] public rounds;
     Voting public roundTracker;
 
+    // Tracking points
+    Voting public pointsTracker;
+    uint256 public defaultPoints = 2000;
+
     event RoundStarted(
         uint256 indexed roundNumber,
         address indexed roundAddress,
@@ -81,16 +85,22 @@ contract RoundsBase is
         _;
     }
 
+    modifier earnPoints() {
+        pointsTracker.castVote(msg.sender, defaultPoints) ;
+        _;
+    }
+
     function initialize(Setting calldata _settings) public initializer {
         settings = _settings;
         _grantRole(DEFAULT_ADMIN_ROLE, settings.admin);
 
         // Setup a total vote stracker
         roundTracker = new Voting();
+        pointsTracker = new Voting();
     }
 
     // Registers a new voter
-    function register() external payable {
+    function register() external earnPoints() payable {
         if (!_canRegister()) revert RegistrationClosed();
         if (registered[msg.sender]) revert UserAlreadyRegistered();
 
@@ -111,7 +121,7 @@ contract RoundsBase is
         return rounds.length == 0 ? 0 : rounds.length - 1;
     }
 
-    function startNextRound() external isOpenToPublic {
+    function startNextRound() external isOpenToPublic earnPoints() {
         uint256 currentRound = _getCurrentRound();
         if (rounds.length == 0 || _isRoundOver(currentRound)) {
             _startNextRound();
@@ -136,7 +146,7 @@ contract RoundsBase is
         );
     }
 
-    function castVote(address[] calldata recipients) external nonReentrant {
+    function castVote(address[] calldata recipients) external nonReentrant earnPoints() {
         _isValidBallot(recipients, msg.sender);
         uint256 currentRound = _getCurrentRound();
         uint256 defaultVoteAmount = 1;
@@ -165,6 +175,14 @@ contract RoundsBase is
         returns (uint256)
     {
         return roundTracker.getVotes(candidate);
+    }
+
+    function getParticipantPoints(address participant)
+        external
+        view
+        returns (uint256)
+    {
+        return pointsTracker.getVotes(participant);
     }
 
     function _isValidBallot(
